@@ -33,9 +33,16 @@ local GetUnitIsBuilding = Spring.GetUnitIsBuilding
 local GetUnitResources = Spring.GetUnitResources
 local GiveOrderToUnit = Spring.GiveOrderToUnit
 local GetTeamResources = Spring.GetTeamResources
+local GetTeamRulesParam = Spring.GetTeamRulesParam
+
+local tidalStrength = Game.tidal
+local windMin = Game.windMin
+local windMax = Game.windMax
+
 local log = Spring.Echo
 local t0
 local totalSavedTime = 0
+local abandonedTargetIDs = {}
 
 function widget:Initialize()
     if Spring.GetSpectatingState() or Spring.IsReplay() then
@@ -187,53 +194,155 @@ end
 
 
 function widget:GameFrame(n)
-    if (n % 5 == 0) then
+  if n % 5 == 0 then
+    for builderID, _ in pairs(builders) do
 
-      for builderID, _ in pairs(builders) do
-        local cmdQueue = GetUnitCommands(builderID, 3);
-        if cmdQueue and #cmdQueue>2 then
-          cmdID = cmdQueue[3].id
-          if cmdID < 0 then
-
-            local targetID = GetUnitIsBuilding(builderID)
-            if targetID then
-              previousBuilding = builders[builderID].previousBuilding
-              if not previousBuilding then
-                t0 = Spring.GetTimer()
-                totalSavedTime = 0
+      -- fast forward
+      local cmdQueue = GetUnitCommands(builderID, 3);
+      if cmdQueue and #cmdQueue > 2 and cmdQueue[3].id < 0 then
+        -- next command is build command
+        local targetID = GetUnitIsBuilding(builderID)
+        if targetID then
+          -- target id recieved
+          if not abandonedTargetIDs[targetID] then
+            -- target has not previously been abandoned
+            previousBuilding = builders[builderID].previousBuilding
+            if not previousBuilding then
+              -- this is the first building in the queue
+              -- t0 = Spring.GetTimer()
+              -- totalSavedTime = 0
+              doFastForwardDecision(builderID, cmdQueue[1].tag, cmdQueue[2].tag, targetID)
+            else
+              local _, _, _, _, prevBuild = GetUnitHealth(previousBuilding)
+              local _, _, _, _, currBuild = GetUnitHealth(targetID)
+              if prevBuild == nil or prevBuild == 1 then
+                -- previous building is done
                 doFastForwardDecision(builderID, cmdQueue[1].tag, cmdQueue[2].tag, targetID)
-              else
-                local _, _, _, _, build = GetUnitHealth(previousBuilding)
-                if build == nil or build == 1 then
-                  doFastForwardDecision(builderID, cmdQueue[1].tag, cmdQueue[2].tag, targetID)
-                end
-              end
+              -- elseif (currBuild ~= nil and currBuild < 1) and isWithinBuildRange(builderID, previousBuilding) then
+              --   -- current building has been started but previous is not, and it is within range
+              --   GiveOrderToUnit(builderID, CMD.INSERT, {0, CMD.REPAIR, previousBuilding}, {"ctrl"})
+              -- end
             end
           end
         end
       end
 
+      -- mm/e switcher
+      targetID = GetUnitIsBuilding(builderID)
+      if (targetID) then
+        targetMM, targetE = getResourceProperties(targetID)
+        hasUnusedMMs, isEnergyStalling, isEnergyLeaking = getResourceStatus()
+
+        -- log(targetMM, targetE, hasUnusedMMs, isEnergyStalling, isEnergyLeaking)
+        if (targetMM >= 0 and hasUnusedMMs) or (targetE < 0 and not isEnergyStalling) then
+          -- v('energy', builderID)
+        elseif targetE > 0 and hasUnusedMMs then
+          -- builderForceResourceAssist('metalmakers', builderID)
+        end
+
+
+      end
     end
+  end
+
+
+  if n % 1000 == 0 then
+    for k,v in pairs(abandonedTargetIDs) do
+      -- this probably doesn't work at all since
+      local _, _, _, _, build = GetUnitHealth(k)
+      if build == nil or build == 1 then
+        table.remove(abandonedTargetIDs, k)
+      end
+    end
+  end
+end
+
+function isWithinBuildRange(builderID, previousBuilding)
+  if UnitDefs[GetUnitDefID(builderID)].buildDistance >
+
+  return false
+end
+
+function getResourceStatus()
+  mm_level = Spring.GetTeamRulesParam(myTeamID, 'mmLevel')
+  e_curr, e_max, e_pull, e_inc, e_exp = Spring.GetTeamResources(myTeamID, 'energy')
+
+  -- log('e_pull '.. e_pull .. ' e_inc ' .. e_inc .. ' e_exp ' ..  e_exp)
+  isPositiveEnergyDerivative = e_inc > (e_pull+e_exp)/2
+  energyLevel = e_curr/e_max/(9001/9001)
+
+  return e_curr/e_max < mm_level*1.06, energyLevel > 0.99 and not isPositiveEnergyDerivative, energyLevel < 0.01 and isPositiveEnergyDerivative
+end
+
+function getResourceProperties(unitID)
+  local unitDefID = GetUnitDefID(targetID)
+  local unitDef = UnitDefs[unitDefID]
+
+  local metalMakingEfficiency = getMetalMakingEfficiency(unitDefID)
+
+  local energyMaking = getEout(unitDef)
+  return metalMakingEfficiency, energyMaking
+end
+
+function getMetalMakingEfficiency(unitDefID)
+  if WG.energyConversion.convertCapacities[unitDefID] then
+    return WG.energyConversion.convertCapacities[unitDefID].e
+  else
+    return 0
+  end
+end
+
+function getEout(unitDef )
+  local totalEOut = unitDef.energyMake or 0
+
+  -- if negsolar[unitDef.name] then
+      -- totalEOut = totalEOut + math.abs(unitDef.energyUpkeep)
+  -- end
+
+  totalEOut = totalEOut + -1*unitDef.energyUpkeep
+
+  if unitDef.tidalGenerator > 0 and tidalStrength > 0 then
+      local mult = 1 -- DEFAULT
+      if unitDef.customParams then
+          mult = unitDef.customParams.energymultiplier or mult
+      end
+      totalEOut = totalEOut +(tidalStrength * mult)
+  end
+
+  if unitDef.windGenerator > 0 then
+      local mult = 1 -- DEFAULT
+      if unitDef.customParams then
+          mult = unitDef.customParams.energymultiplier or mult
+      end
+
+      local unitWindMin = math.min(windMin, unitDef.windGenerator)
+      local unitWindMax = math.min(windMax, unitDef.windGenerator)
+      totalEOut = totalEOut + (((unitWindMin + unitWindMax) / 2 ) * mult)
+  end
+  return totalEOut
 end
 
 function doFastForwardDecision(builderID, cmdQueueTag, cmdQueueTagg, targetID)
   selectedUnits = GetSelectedUnits()
   local totalBuildSpeed = getBuildersBuildSpeed(getUnitsBuildingUnit(targetID))
   local secondsLeft = getBuildTimeLeft(targetID)
-  if isTimeToMoveOn(secondsLeft, builderID, totalBuildSpeed) and isResourceToMoveOn(secondsLeft, targetID, totalBuildSpeed) then
-    builders[builderID].previousBuilding = targetID
+  local unitDef = UnitDefs[GetUnitDefID(targetID)]
+  if isTimeToMoveOn(secondsLeft, builderID, unitDef, totalBuildSpeed) and isResourceToMoveOn(secondsLeft, unitDef, totalBuildSpeed) then
     GiveOrderToUnit(builderID, CMD.REMOVE, {i,cmdQueueTag}, {"ctrl"})
     GiveOrderToUnit(builderID, CMD.REMOVE, {i,cmdQueueTagg}, {"ctrl"})
+    builders[builderID].previousBuilding = targetID
+    abandonedTargetIDs[targetID] = true
   end
 end
 
-function isTimeToMoveOn(secondsLeft, builderID, totalBuildSpeed)
+function isTimeToMoveOn(secondsLeft, builderID, unitDef, totalBuildSpeed)
   local plannerBuildSpeed = builders[builderID].originalBuildSpeed
   local plannerBuildShare = plannerBuildSpeed / totalBuildSpeed
+  local unslowness = 45/unitDef.speed
   -- log("plannerBuild calc " .. plannerBuildShare .. " = " .. plannerBuildSpeed .. " / " .. totalBuildSpeed)
-  if ((plannerBuildShare < 0.75 and secondsLeft < 1.2) or (plannerBuildShare < 0.5 and secondsLeft < 3.4) or (plannerBuildShare < 0.15 and secondsLeft < 10) or (plannerBuildShare < 0.05 and secondsLeft < 20)) then
+  if ((plannerBuildShare < 0.75 and secondsLeft < 1.2*unslowness) or (plannerBuildShare < 0.5 and secondsLeft < 3.4*unslowness) or (plannerBuildShare < 0.15 and secondsLeft < 10*unslowness) or (plannerBuildShare < 0.05 and secondsLeft < 20*unslowness)) then
     totalSavedTime = totalSavedTime + secondsLeft
-    log(string.format('Con moved on, %.0f%% buildshare and %.1f sec left, saved %.0f moving sec, lost %.0f con total sec', plannerBuildShare*100, secondsLeft, totalSavedTime, Spring.DiffTimers(Spring.GetTimer(), t0)))
+    -- log(string.format('Con moved on, %.0f%% buildshare and %.1f sec left, saved %.0f moving sec, lost %.0f con total sec', plannerBuildShare*100, secondsLeft, totalSavedTime, Spring.DiffTimers(Spring.GetTimer(), t0)))
     return true
     -- return false
   else
@@ -242,8 +351,8 @@ function isTimeToMoveOn(secondsLeft, builderID, totalBuildSpeed)
 end
 
 
-function isResourceToMoveOn(secondsLeft, targetID, currentBuildSpeed)
-  local unitDef = UnitDefs[GetUnitDefID(targetID)]
+function isResourceToMoveOn(secondsLeft, unitDef, currentBuildSpeed)
+
 
   local speed = unitDef.buildTime / currentBuildSpeed
   local metal = unitDef.metalCost / speed
@@ -382,3 +491,45 @@ function traceUpkeep(unitID, alreadyCounted)
 end
 
 
+
+
+
+
+
+
+-- for logging
+function table.val_to_str (v )
+  if "string" == type(v ) then
+    v = string.gsub(v, "\n", "\\n" )
+    if string.match(string.gsub(v,"[^'\"]",""), '^"+$' ) then
+      return "'" .. v .. "'"
+    end
+    return '"' .. string.gsub(v,'"', '\\"' ) .. '"'
+  else
+    return "table" == type(v ) and table.tostring(v ) or
+      tostring(v )
+  end
+end
+
+function table.key_to_str (k )
+  if "string" == type(k ) and string.match(k, "^[_%a][_%a%d]*$" ) then
+    return k
+  else
+    return "[" .. table.val_to_str(k ) .. "]"
+  end
+end
+
+function table.tostring(tbl )
+  local result, done = {}, {}
+  for k, v in ipairs(tbl ) do
+    table.insert(result, table.val_to_str(v ) )
+    done[ k ] = true
+  end
+  for k, v in pairs(tbl ) do
+    if not done[ k ] then
+      table.insert(result,
+        table.key_to_str(k ) .. "=" .. table.val_to_str(v ) )
+    end
+  end
+  return "{" .. table.concat(result, "," ) .. "}"
+end
