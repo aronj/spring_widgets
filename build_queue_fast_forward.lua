@@ -10,22 +10,12 @@ function widget:GetInfo()
     }
 end
 
-local builders = {}
-local commanderBuildSpeed = 100
-local myTeamID = Spring.GetMyTeamID()
-local willStall = false
-local selectedUnits = nil
-
-
-local metalMakers = {}
-local possibleMetalMakersUpkeep = 0
-local possibleMetalMakersProduction = 0
-local releasedMetal = 0
-
 local GetAllyTeamList = Spring.GetAllyTeamList
 local GetMyTeamID = Spring.GetMyTeamID
 local GetSelectedUnits = Spring.GetSelectedUnits
 local GetTeamResources = Spring.GetTeamResources
+local GetTeamResources = Spring.GetTeamResources
+local GetTeamRulesParam = Spring.GetTeamRulesParam
 local GetTeamRulesParam = Spring.GetTeamRulesParam
 local GetTeamUnits = Spring.GetTeamUnits
 local GetUnitCommands = Spring.GetUnitCommands
@@ -39,15 +29,32 @@ local GetUnitsInSphere = Spring.GetUnitsInSphere
 local GiveOrderToUnit = Spring.GiveOrderToUnit
 
 
-local tidalStrength = Game.tidal
-local windMin = Game.windMin
-local windMax = Game.windMax
-
-local log = Spring.Echo
-local t0 = Spring.GetTimer()
-local totalSavedTime = 0
 local abandonedTargetIDs = {}
+local builders = {}
+local commanderBuildSpeed = 100
 local conversionLevelHistory = {}
+local log = Spring.Echo
+local mainIterationModuloLimit = 5
+local regularizedResourceDerivativesMetal = {1}
+local regularizedResourceDerivativesEnergy = {1}
+local metalMakers = {}
+local myTeamID = Spring.GetMyTeamID()
+local possibleMetalMakersProduction = 0
+local possibleMetalMakersUpkeep = 0
+local releasedMetal = 0
+local selectedUnits = nil
+local t0 = Spring.GetTimer()
+local tidalStrength = Game.tidal
+local totalSavedTime = 0
+local willStall = false
+local windMax = Game.windMax
+local windMin = Game.windMin
+local regularizedPositiveMetal = true
+local regularizedPositiveEnergy = true
+local regularizedNegativeMetal = false
+local regularizedNegativeEnergy = false
+local metalLevel = 0
+local positiveMMLevel = 0
 
 function widget:Initialize()
     if Spring.GetSpectatingState() or Spring.IsReplay() then
@@ -197,8 +204,8 @@ end
 
 
 function widget:GameFrame(n)
-  if n % 5 == 0 then
-    builderIteration()
+  if n % mainIterationModuloLimit == 0 then
+    builderIteration(n)
   end
 
   -- if t1 then
@@ -224,7 +231,7 @@ function widget:GameFrame(n)
   end
 end
 
-function builderIteration()
+function builderIteration(n)
   for builderID, _ in pairs(builders) do
     local targetID = GetUnitIsBuilding(builderID)
     if targetID then
@@ -260,20 +267,65 @@ function builderIteration()
       end
 
 
-
       local mpx, _, mpz = GetUnitPosition(builderID, true)
       local neighbours = GetUnitsInCylinder(mpx, mpz, builderDef.buildDistance, myTeamID)
 
       -- mm/e switcher
       targetMM, targetE = getResourceProperties(targetDefID, targetDef)
-      hasUnusedMMs, isEnergyStalling, isEnergyLeaking = getResourceStatus()
+      -- tooMuchMMs, tooLittleMMs, isMetalStalling, isMetalLeaking, isEnergyStalling, isEnergyLeaking = getResourceStatus()
+      positiveMMLevel, tooLittleMMs, tooMuchMMs, metalLevel, isPositiveMetalDerivative, energyLevel, isPositiveEnergyDerivative = getResourceStatus()
 
-      -- log(targetMM, targetE, hasUnusedMMs, isEnergyStalling, isEnergyLeaking)
-      if (targetMM >= 0 and hasUnusedMMs) or (targetE < 0 and not isEnergyStalling) then
-        -- builderForceResourceAssist(0, builderID, neighbours, targetMM, targetE)
-      elseif targetE > 0 and not hasUnusedMMs then
-        -- builderForceResourceAssist(1, builderID, neighbours, targetMM, targetE)
+      if n % mainIterationModuloLimit*30 == 0 then
+        table.insert(regularizedResourceDerivativesMetal, 1, isPositiveMetalDerivative)
+        table.insert(regularizedResourceDerivativesEnergy, 1, isPositiveEnergyDerivative)
+        if table.getn(regularizedResourceDerivativesMetal) > 7 then
+          table.remove(regularizedResourceDerivativesMetal)
+          table.remove(regularizedResourceDerivativesEnergy)
+        end
       end
+
+      regularizedPositiveMetal = table.full_of(regularizedResourceDerivativesMetal, true)
+      regularizedPositiveEnergy = table.full_of(regularizedResourceDerivativesEnergy, true)
+      regularizedNegativeMetal = table.full_of(regularizedResourceDerivativesMetal, false)
+      regularizedNegativeEnergy = table.full_of(regularizedResourceDerivativesMetal, false)
+
+
+      -- isMetalStalling = metalLevel < 0.01 and not regularizedPositiveMetal
+      -- isMetalLeaking = metalLevel > 0.99 and regularizedPositiveMetal
+      -- isEnergyStalling = energyLevel < 0.01 and not regularizedPositiveEnergy
+      -- isEnergyLeaking = energyLevel > 0.99 and regularizedPositiveEnergy
+
+      -- isMetalStalling = metalLevel < 0.01 and regularizedNegativeMetal
+      -- isMetalLeaking = metalLevel > 0.99 and regularizedPositiveMetal
+      -- isEnergyStalling = energyLevel < 0.01 and regularizedNegativeEnergy
+      isEnergyLeaking = energyLevel > 0.99 and isPositiveEnergyDerivative
+
+      if regularizedPositiveMetal then
+        -- log('m+')
+      end
+      if regularizedPositiveEnergy then
+        -- log('e+')
+      end
+
+      -- log(targetMM, targetE, tooMuchMMs, isEnergyStalling, isEnergyLeaking)
+      -- m is increasing, e is not decreasing
+      -- if metalLevel > 0.5 and regularizedPositiveMetal and not regularizedNegativeEnergy then
+      --   log('find buildpower unit')
+      --   builderForceAssist(0, builderID, targetDef, neighbours, targetMM, targetE)
+      -- end
+
+      -- not building buildpower unit or
+      -- or building buildpower unit, m not increasing
+      -- if unitDef.buildpower <= 0 or (unitDef.buildpower > 0 and not regularizedPositiveMetal) then
+        -- e is not increasing, building a mm, under mm level
+        -- e is not increasing, building a non-e building
+      if not regularizedPositiveEnergy and not isEnergyLeaking and ((targetMM >= 0 and not positiveMMLevel) or targetE < 0 and isEnergyStalling) then
+        builderForceAssist('energy', builderID, targetID, targetDef, neighbours, targetMM, targetE)
+      -- building e building,
+      elseif targetE > 0 and positiveMMLevel and regularizedPositiveEnergy then
+        builderForceAssist('mm', builderID, targetID, targetDef, neighbours, targetMM, targetE)
+      end
+      -- end
 
       -- easy finish neighbour
       local _, _, _, _, targetBuild = GetUnitHealth(targetID)
@@ -284,13 +336,13 @@ function builderIteration()
           local _, _, _, _, candidateBuild = GetUnitHealth(candidateID)
           if candidateBuild and candidateBuild < 1 and candidateBuild > targetBuild then
             -- candidate is better
-            local buildTimeLeft = getBuildTimeLeft(targetID)
+            local targetBuildTimeLeft = getBuildTimeLeft(targetID)
             local cmdQueue = GetUnitCommands(builderID, 2);
             -- log('targetID ' .. targetID)
-            if buildTimeLeft > 0.5 then
+            if targetBuildTimeLeft > 0.5 then
               -- log('moving on to nearby')
               GiveOrderToUnit(builderID, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, candidateID}, {"alt"})
-              builders[builderID].previousBuilding = targetID
+              -- builders[builderID].previousBuilding = targetID
               -- t1 = Spring.GetTimer()
             else
             end
@@ -304,46 +356,95 @@ function builderIteration()
 end
 
 
-function builderForceResourceAssist(resourceType, builderID, neighbours, targetMM, targetE)
-  for _, candidateID in ipairs(neighbours) do
-    local _, _, _, _, candidateBuild = GetUnitHealth(candidateID)
-    if candidateBuild ~= nil and candidateBuild < 1 then
-      local candidateDefID = GetUnitDefID(candidateID)
-      local candidateDef = UnitDefs[candidateDefID]
-      local candidateMM, candidateE = getResourceProperties(candidateDefID, candidateDef)
-      if resourceType == 0 then
-        -- log('candidateE ' .. candidateE .. ' >? ' .. targetE )
-        if candidateE > targetE then
-          -- log('set to e')
+function builderForceAssist(assistType, builderID, targetID, targetDef, neighbours, targetMM, targetE)
+  foundBuildPowerUnit = false
+  if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
+    -- log('looking for buildpower')
+    for _, candidateID in ipairs(neighbours) do
+      local _, _, _, _, candidateBuild = GetUnitHealth(candidateID)
+      if candidateBuild ~= nil and candidateBuild < 1 then
+
+        local candidateDefID = GetUnitDefID(candidateID)
+        local candidateDef = UnitDefs[candidateDefID]
+        if candidateDef.buildSpeed ~= nil then
+          -- log('build ' .. candidateBuild .. ' buildpower ' .. candidateDef.buildSpeed)
+        end
+        if candidateDef.buildSpeed ~= nil and candidateDef.buildSpeed > 0 then
           GiveOrderToUnit(builderID, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, candidateID}, {"alt"})
+          foundBuildPowerUnit = true
+          -- log('found buildpower')
           break
         end
-      elseif resourceType == 1 then
-        -- log('candidateMM ' .. candidateMM .. ' >? ' .. targetMM )
-        if candidateMM > targetMM then
-          -- log('set to mm')
-          -- GiveOrderToUnit(builderID, CMD.INSERT, {1, CMD.REPAIR, CMD.OPT_CTRL, candidateID}, {"alt"})
+      end
+    end
+  elseif targetDef.buildSpeed > 0 then
+    -- log('maybe switch from buildpower building')
+    local cmdQueue = GetUnitCommands(builderID, 3);
+    if cmdQueue and #cmdQueue > 2 then
+      local _, _, _, _, targetBuild = GetUnitHealth(targetID)
+      -- log('queue ids ', cmdQueue[1].id, cmdQueue[2].id, cmdQueue[3].id, 'target', targetID, targetBuild)
+    end
+    if cmdQueue and #cmdQueue > 2 and cmdQueue[2].id < 0 then
+      -- log('continue on build queue instead of buildpower unit')
+      moveOnFromBuilding(builderID, targetID, cmdQueue[1].tag)
+    end
+  end
+
+  if foundBuildPowerUnit == false then
+    for _, candidateID in ipairs(neighbours) do
+      -- log('looking for ' .. assistType)
+      local _, _, _, _, candidateBuild = GetUnitHealth(candidateID)
+      if candidateBuild ~= nil and candidateBuild < 1 then
+        local candidateDefID = GetUnitDefID(candidateID)
+        local candidateDef = UnitDefs[candidateDefID]
+        local candidateMM, candidateE = getResourceProperties(candidateDefID, candidateDef)
+        if assistType == 'energy' then
+          -- log('candidateE ' .. candidateE .. ' >? ' .. targetE )
+          if candidateE > targetE then
+            GiveOrderToUnit(builderID, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, candidateID}, {"alt"})
+            -- log('found e')
+            break
+          end
+        elseif assistType == 'mm' then
+          -- log('candidateMM ' .. candidateMM .. ' >? ' .. targetMM )
+          if candidateMM > targetMM then
+            GiveOrderToUnit(builderID, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, candidateID}, {"alt"})
+            -- log('found mm')
+            break
+          end
+        elseif assistType == 'metal' then
+          -- log('metal')
           break
         end
-      elseif resourceType == 2 then
-        log('metal')
       end
     end
   end
 end
 
 function getResourceStatus()
-  mm_level = Spring.GetTeamRulesParam(myTeamID, 'mmLevel')
-  e_curr, e_max, e_pull, e_inc, e_exp = Spring.GetTeamResources(myTeamID, 'energy')
+  mm_level = GetTeamRulesParam(myTeamID, 'mmLevel')
+  m_curr, m_max, m_pull, m_inc, m_exp = GetTeamResources(myTeamID, 'metal')
+  e_curr, e_max, e_pull, e_inc, e_exp = GetTeamResources(myTeamID, 'energy')
+
+  isPositiveMetalDerivative = m_inc > (m_pull+m_exp)/2
+  metalLevel = m_curr/m_max
 
   -- log('e_pull '.. e_pull .. ' e_inc ' .. e_inc .. ' e_exp ' ..  e_exp)
   isPositiveEnergyDerivative = e_inc > (e_pull+e_exp)/2
   energyLevel = e_curr/e_max
 
-  hasUnusedMMs = energyLevel < mm_level*1.09
+  tooLittleMMs = energyLevel > mm_level*1.1
+  tooMuchMMs = energyLevel < mm_level*0.9
+  if energyLevel >= mm_level then
+    positiveMMLevel = true
+    else
+    positiveMMLevel = false
+  end
+  isMetalStalling = metalLevel < 0.01 and not isPositiveMetalDerivative
+  isMetalLeaking = metalLevel > 0.99 and isPositiveMetalDerivative
   isEnergyStalling = energyLevel < 0.01 and not isPositiveEnergyDerivative
   isEnergyLeaking = energyLevel > 0.99 and isPositiveEnergyDerivative
-  return hasUnusedMMs, isEnergyStalling, isEnergyLeaking
+  return positiveMMLevel, tooLittleMMs, tooMuchMMs, metalLevel, isPositiveMetalDerivative, energyLevel, isPositiveEnergyDerivative
 end
 
 function getResourceProperties(unitDefID, unitDef)
@@ -603,4 +704,22 @@ function table.tostring(tbl )
     end
   end
   return "{" .. table.concat(result, "," ) .. "}"
+end
+
+function table.has_value (tab, val)
+    for _, value in ipairs (tab) do
+        if value == val then
+            return true
+        end
+    end
+    return false
+end
+
+function table.full_of (tab, val)
+    for _, value in ipairs (tab) do
+        if value ~= val then
+            return false
+        end
+    end
+    return true
 end
