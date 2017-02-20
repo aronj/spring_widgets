@@ -34,8 +34,8 @@ local commanderBuildSpeed = 100
 local conversionLevelHistory = {}
 local log = Spring.Echo
 local mainIterationModuloLimit = 5
-local regularizedResourceDerivativesMetal = {1}
-local regularizedResourceDerivativesEnergy = {1}
+local regularizedResourceDerivativesMetal = {true}
+local regularizedResourceDerivativesEnergy = {true}
 local metalMakers = {}
 local myTeamId = Spring.GetMyTeamID()
 local possibleMetalMakersProduction = 0
@@ -250,7 +250,7 @@ function builderIteration(n)
       local targetDefID = GetUnitDefID(targetId)
       local targetDef = UnitDefs[targetDefID]
 
-      if n % mainIterationModuloLimit * 30 == 0 then
+      if n % mainIterationModuloLimit == 0 then
         table.insert(regularizedResourceDerivativesMetal, 1, isPositiveMetalDerivative)
         table.insert(regularizedResourceDerivativesEnergy, 1, isPositiveEnergyDerivative)
         if table.getn(regularizedResourceDerivativesMetal) > 7 then
@@ -260,7 +260,7 @@ function builderIteration(n)
         regularizedPositiveMetal = table.full_of(regularizedResourceDerivativesMetal, true)
         regularizedPositiveEnergy = table.full_of(regularizedResourceDerivativesEnergy, true)
         regularizedNegativeMetal = table.full_of(regularizedResourceDerivativesMetal, false)
-        regularizedNegativeEnergy = table.full_of(regularizedResourceDerivativesMetal, false)
+        regularizedNegativeEnergy = table.full_of(regularizedResourceDerivativesEnergy, false)
       end
       updateFastResourceStatus()
 
@@ -305,10 +305,14 @@ function builderIteration(n)
       local neighbours = GetUnitsInCylinder(mpx, mpz, builderDef.buildDistance, myTeamId)
 
       local candidateNeighbours = {}
+      local candidateNeighboursInclusive = {}
       for i, candidateId in ipairs(neighbours) do
         local _, _, _, _, candidateBuild = GetUnitHealth(candidateId)
-        if candidateBuild ~= nil and candidateBuild < 1 and candidateId ~= builderId then
-          table.insert(candidateNeighbours, candidateId)
+        if candidateBuild ~= nil and candidateBuild < 1 then
+          table.insert(candidateNeighboursInclusive, candidateId)
+          if candidateId ~= builderId  then
+            table.insert(candidateNeighbours, candidateId)
+          end
         end
       end
 
@@ -369,7 +373,7 @@ function builderIteration(n)
 
       -- easy finish neighbour
       local _, _, _, _, targetBuild = GetUnitHealth(targetId)
-      for _, candidateId in ipairs(candidateNeighbours) do
+      for _, candidateId in ipairs(candidateNeighboursInclusive) do
         local candidateDef = unitDef(candidateId)
         -- same type and not actually same buildings
         if candidateId ~= targetId and candidateDef == targetDef then
@@ -425,7 +429,7 @@ end
 
 
 function builderForceAssist(assistType, builderId, targetId, targetDef, neighbours, targetMM, targetE)
-  foundBuildPowerUnit = false
+  local foundBuildPowerUnit = false
   if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
     -- log('looking for buildpower')
     for _, candidateId in ipairs(neighbours) do
