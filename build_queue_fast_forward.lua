@@ -1,7 +1,7 @@
 function widget:GetInfo()
     return {
         name = "build queue fast forward",
-        desc = "Lots of code from gui_build_costs.lua Milan Satala and also some from ecostats.lua by Jools, iirc",
+        desc = "Lots of code from gui_build_costs.lua by Milan Satala and also some from ecostats.lua by Jools, iirc",
         author = "-",
         date = "feb, 2016",
         license = "GNU GPL, v2 or later",
@@ -52,8 +52,6 @@ local regularizedPositiveMetal = true
 local regularizedPositiveEnergy = true
 local regularizedNegativeMetal = false
 local regularizedNegativeEnergy = false
---local metalLevel = 0
---local positiveMMLevel = 0
 
 local positiveMMLevel = 0
 local tooLittleMMs = true
@@ -72,15 +70,6 @@ function widget:Initialize()
         widgetHandler:RemoveWidget()
     end
 
-    registerUnits()
-end
-
-function registerUnits()
-    builders = {}
-    metalMakers = {}
-    possibleMetalMakersUpkeep = 0
-    possibleMetalMakersProduction = 0
-
     local myUnits = GetTeamUnits(myTeamId)
     for _, unitID in ipairs(myUnits) do
         local unitDefID = GetUnitDefID(unitID)
@@ -88,9 +77,7 @@ function registerUnits()
     end
 end
 
-
-
-function registerUnit(unitID, unitDefID, unitTeam)
+function registerUnit(unitID, unitDefID)
 
   if not unitDefID then
     return
@@ -102,22 +89,14 @@ function registerUnit(unitID, unitDefID, unitTeam)
 
     builders[unitID] = {["buildSpeed"] = unitDef.buildSpeed, originalBuildSpeed = unitDef.buildSpeed, ['unitDef'] = unitDef, ["targetId"] = nil, ["guards"] = {},
       ['previousBuilding'] = nil}
-    -- log(UnitDefs[unitDefID].humanName .. " registered")
 
     if unitDef.customParams.iscommander then
       commanderBuildSpeed = unitDef.buildSpeed
     end
 
-  -- elseif unitTeam == myTeamID and isMetalMaker(unitDef) then
-    -- registerMetalMaker(unitID, unitDef)
-  -- else
-    -- return
-  -- end
   end
 
 end
-
-
 
 function widget:UnitCreated(unitID, unitDefID, unitTeam)
   registerUnit(unitID, unitDefID, unitTeam)
@@ -125,24 +104,17 @@ end
 
 function widget:UnitGiven(unitID, unitDefID, unitTeam, oldTeam)
   if unitTeam == myTeamId then
-    if builders[unitID] then
-      builders[unitID].owned = true
-    else
-      -- local unitDef = UnitDefs[unitDefID]
-      -- if isMetalMaker(unitDef) then
-        -- registerMetalMaker(unitID, unitDef)
-      -- end
-    end
+    registerUnit(unitID, unitDefID)
   end
 end
 
 
-function getBuildersBuildSpeed(selectedBuilders)
+function getBuildersBuildSpeed(tempBuilders)
   local totalSpeed = 0
 
-  for _, unitID in pairs(selectedBuilders) do
+  for _, unitID in pairs(tempBuilders) do
     local targetId = builders[unitID].targetId
-    if not targetId or not isAlreadyInTable(targetId, selectedBuilders) then
+    if not targetId or not isAlreadyInTable(targetId, tempBuilders) then
       totalSpeed = totalSpeed + builders[unitID].buildSpeed
     end
   end
@@ -153,22 +125,12 @@ end
 
 function getBuildTimeLeft(unitID)
 
-  -- local health, maxHealth, paralyzeDamage, capture, build = GetUnitHealth(unitID)
   local _, _, _, _, build = GetUnitHealth(unitID)
-
-  -- local alreadyBuilding = {}
   local currentBuildSpeed = 0
-  -- local releasedExpenditures = getSelectedUnitsUpkeep()  --{metal = 0, energy = 0}
-
   for builderId, _ in pairs(builders) do
     local targetId = GetUnitIsBuilding(builderId)
     if targetId == unitID and builderId ~= unitID then
-      -- alreadyBuilding[builderId] = builderId
       currentBuildSpeed = currentBuildSpeed + builders[builderId].originalBuildSpeed
-
-      -- if selectedBuilders[builderId] or isAlreadyInTable(builderId, selectedBuilders) then
-        -- selectedBuilders[builderId] = nil
-      -- end
     end
   end
 
@@ -181,17 +143,6 @@ function getBuildTimeLeft(unitID)
   return time
 end
 
-
-function getTargetsBuild(unitID)
-  local targetId = builders[unitID].targetId
-  if targetId then
-    return getTargetsBuild(targetId)
-  else
-    return GetUnitIsBuilding(unitID)
-  end
-end
-
-
 function getUnitsBuildingUnit(unitID)
   local building = {}
 
@@ -201,7 +152,6 @@ function getUnitsBuildingUnit(unitID)
       building[builderId] = builderId
     end
   end
-
   return building
 end
 
@@ -210,18 +160,6 @@ function widget:GameFrame(n)
   if n % mainIterationModuloLimit == 0 then
     builderIteration(n)
   end
-
-  -- if t1 then
-  --   log(string.format('%.1f seconds since last action', Spring.DiffTimers(Spring.GetTimer(), t1)))
-  --   if Spring.DiffTimers(Spring.GetTimer(), t1) > 30 then
-  --     -- log(Spring.DiffTimers(Spring.GetTimer(), t1))
-  --     t0 = Spring.GetTimer()
-  --   end
-  -- end
-
-  -- if n % 96 == 0 then
-    -- log(string.format('%.1f seconds from t0', Spring.DiffTimers(Spring.GetTimer(), t0)))
-  -- end
 
   if n % 1000 == 0 then
     for k, v in pairs(abandonedTargetIDs) do
@@ -238,7 +176,7 @@ function builderIteration(n)
     local targetId = GetUnitIsBuilding(builderId)
     local cmdQueue = GetUnitCommands(builderId, 3)
 
-    -- dont wait
+    -- dont wait if has queued stuff
     if cmdQueue and #cmdQueue > 0 and cmdQueue[1].id == 5 and (isMetalLeaking or isEnergyLeaking) then
       GiveOrderToUnit(builderId, CMD.REMOVE, {nil}, {"ctrl"})
     end
@@ -250,26 +188,17 @@ function builderIteration(n)
       local targetDefID = GetUnitDefID(targetId)
       local targetDef = UnitDefs[targetDefID]
 
-      if n % mainIterationModuloLimit == 0 then
-        table.insert(regularizedResourceDerivativesMetal, 1, isPositiveMetalDerivative)
-        table.insert(regularizedResourceDerivativesEnergy, 1, isPositiveEnergyDerivative)
-        if table.getn(regularizedResourceDerivativesMetal) > 7 then
-          table.remove(regularizedResourceDerivativesMetal)
-          table.remove(regularizedResourceDerivativesEnergy)
-        end
-        regularizedPositiveMetal = table.full_of(regularizedResourceDerivativesMetal, true)
-        regularizedPositiveEnergy = table.full_of(regularizedResourceDerivativesEnergy, true)
-        regularizedNegativeMetal = table.full_of(regularizedResourceDerivativesMetal, false)
-        regularizedNegativeEnergy = table.full_of(regularizedResourceDerivativesEnergy, false)
+      table.insert(regularizedResourceDerivativesMetal, 1, isPositiveMetalDerivative)
+      table.insert(regularizedResourceDerivativesEnergy, 1, isPositiveEnergyDerivative)
+      if table.getn(regularizedResourceDerivativesMetal) > 7 then
+        table.remove(regularizedResourceDerivativesMetal)
+        table.remove(regularizedResourceDerivativesEnergy)
       end
+      regularizedPositiveMetal = table.full_of(regularizedResourceDerivativesMetal, true)
+      regularizedPositiveEnergy = table.full_of(regularizedResourceDerivativesEnergy, true)
+      regularizedNegativeMetal = table.full_of(regularizedResourceDerivativesMetal, false)
+      regularizedNegativeEnergy = table.full_of(regularizedResourceDerivativesEnergy, false)
       updateFastResourceStatus()
-
-      if regularizedPositiveMetal then
-        -- log('m+')
-      end
-      if regularizedPositiveEnergy then
-        -- log('e+')
-      end
 
       -- queue fast forwarder
       if cmdQueue then
@@ -282,14 +211,10 @@ function builderIteration(n)
             -- target has not previously been abandoned
             local previousBuilding = builders[builderId].previousBuilding
             if not previousBuilding then
-              -- this is the first building for builder
-              -- t0 = Spring.GetTimer()
-              -- totalSavedTime = 0
               doFastForwardDecision(builderId, targetId, cmdQueue[1].tag, cmdQueue[2].tag)
 
             else
               local _, _, _, _, prevBuild = GetUnitHealth(previousBuilding)
-              local _, _, _, _, currBuild = GetUnitHealth(targetId)
               if prevBuild == nil or prevBuild == 1 then
                 -- previous building is gone/done
                 doFastForwardDecision(builderId, targetId, cmdQueue[1].tag, cmdQueue[2].tag)
@@ -316,60 +241,26 @@ function builderIteration(n)
         end
       end
 
+      -- refresh for possible target change
+      targetId = GetUnitIsBuilding(builderId)
+      targetDefID = GetUnitDefID(targetId)
+      targetDef = UnitDefs[targetDefID]
 
       -- mm/e switcher
       local targetUnitMM, targetUnitE = getUnitResourceProperties(targetDefID, targetDef)
 
-
-
-      -- log(targetMM, targetE, tooMuchMMs, isEnergyStalling, isEnergyLeaking)
-      -- m is increasing, e is not decreasing
-      -- if metalLevel > 0.5 and regularizedPositiveMetal and not regularizedNegativeEnergy then
-      --   log('find buildpower unit')
-      --   builderForceAssist(0, builderId, targetDef, neighbours, targetMM, targetE)
-      -- end
-
-      -- not building buildpower unit or
-      -- or building buildpower unit, m not increasing
-      -- if unitDef.buildpower <= 0 or (unitDef.buildpower > 0 and not regularizedPositiveMetal) then
-        -- e is not increasing, building a mm, under mm level
-        -- e is not increasing, building a non-e building
---          log('cmdQueue')
---          log(table.tostring(cmdQueue))
---      log('force assist conditions e')
-      --[[log(table.tostring({
-      not regularizedPositiveEnergy,
-          not isEnergyLeaking,
-          '(',
-          targetUnitMM >= 0,
-          not positiveMMLevel,
-          'or',
-          targetUnitE < 0,
-          isEnergyStalling,
-          ')',
---          targetUnitMM >= 0 and not positiveMMLevel,
---          targetUnitE < 0 and isEnergyStalling,
-        }))
-      log('force assist conditions m')
-      log(table.tostring({
-        targetUnitE > 0 ,positiveMMLevel ,regularizedPositiveEnergy
-      }))
-]]
-      -- refresh for possible target change
-      targetId = GetUnitIsBuilding(builderId)
-
       if n % (mainIterationModuloLimit * 3) == 0 then
         if not regularizedPositiveEnergy and not isEnergyLeaking and ((targetUnitMM >= 0 and not positiveMMLevel) or (targetUnitE < 0 and isEnergyStalling)) then
           builderForceAssist('energy', builderId, targetId, targetDef, candidateNeighbours, targetUnitMM, targetUnitE)
-        -- building e building,
         elseif targetUnitE > 0 and positiveMMLevel and regularizedPositiveEnergy then
           builderForceAssist('mm', builderId, targetId, targetDef, candidateNeighbours, targetUnitMM, targetUnitE)
         end
       end
-      -- end
 
       -- refresh for possible target change
       targetId = GetUnitIsBuilding(builderId)
+      targetDefID = GetUnitDefID(targetId)
+      targetDef = UnitDefs[targetDefID]
 
       -- easy finish neighbour
       local _, _, _, _, targetBuild = GetUnitHealth(targetId)
@@ -380,12 +271,6 @@ function builderIteration(n)
           local _, _, _, _, candidateBuild = GetUnitHealth(candidateId)
           if candidateBuild and candidateBuild < 1 and candidateBuild > targetBuild then
             local targetBuildTimeLeft = getBuildTimeLeft(targetId)
-            -- candidate is better
---            if targetBuildTimeLeft*2 > 0.35 and candidateBuild > targetBuild then
---            log('candidateBuild')
---            log(candidateBuild)
---            log('targetBuild')
---            log(targetBuild)
             if candidateBuild > targetBuild then
               repair(builderId, candidateId)
               break
@@ -406,17 +291,11 @@ function purgeCompleteRepairs(builderId, cmdQueue)
   local shitFound = true
   while shitFound do
     shitFound = false
---    log('while shit ')
---    log(shitFound)
---    log(table.tostring(cmdQueue))
     for _, cmd in ipairs(cmdQueue) do
       if cmd.id == 40 then
---        log('shit?')
         local _, _, _, _, targetBuild = GetUnitHealth(cmd.params[1])
---        log(targetBuild)
         if not targetBuild or targetBuild == 1 then
           shitFound = true
---          log('removing cmd '.. cmd.tag)
           GiveOrderToUnit(builderId, CMD.REMOVE, {cmd.tag}, {"ctrl"})
         end
       end
@@ -431,7 +310,6 @@ end
 function builderForceAssist(assistType, builderId, targetId, targetDef, neighbours, targetMM, targetE)
   local foundBuildPowerUnit = false
   if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
-    -- log('looking for buildpower')
     for _, candidateId in ipairs(neighbours) do
       local _, _, _, _, candidateBuild = GetUnitHealth(candidateId)
       if candidateBuild ~= nil and candidateBuild < 1 then
@@ -439,25 +317,17 @@ function builderForceAssist(assistType, builderId, targetId, targetDef, neighbou
         local candidateDefID = GetUnitDefID(candidateId)
         local candidateDef = UnitDefs[candidateDefID]
         if candidateDef.buildSpeed ~= nil then
-          -- log('build ' .. candidateBuild .. ' buildpower ' .. candidateDef.buildSpeed)
         end
         if candidateDef.buildSpeed ~= nil and candidateDef.buildSpeed > 0 then
           GiveOrderToUnit(builderId, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, candidateId}, {"alt"})
           foundBuildPowerUnit = true
-          -- log('found buildpower')
           break
         end
       end
     end
   elseif targetDef.buildSpeed > 0 then
-    -- log('maybe switch from buildpower building')
     local cmdQueue = GetUnitCommands(builderId, 3);
---    if cmdQueue and #cmdQueue > 2 then
---      local _, _, _, _, targetBuild = GetUnitHealth(targetId)
-      -- log('queue ids ', cmdQueue[1].id, cmdQueue[2].id, cmdQueue[3].id, 'target', targetId, targetBuild)
---    end
     if cmdQueue and #cmdQueue > 2 and cmdQueue[2].id < 0 then
-      -- log('continue on build queue instead of buildpower unit')
       moveOnFromBuilding(builderId, targetId, cmdQueue[1].tag)
     end
   end
@@ -466,7 +336,6 @@ function builderForceAssist(assistType, builderId, targetId, targetDef, neighbou
     local bestCandidate = getBestCandidate(neighbours, assistType, targetE, targetMM)
 
     if bestCandidate ~= false and bestCandidate ~= targetId then
---      log('bestCandidate '..bestCandidate)
       repair(builderId, bestCandidate)
     end
 
@@ -485,7 +354,6 @@ function getBestCandidate(candidatesOriginal, assistType, targetE, targetMM)
 
   for i, candidateId in ipairs(candidates) do
     local cdefid = GetUnitDefID(candidateId)
---    log(table.tostring(UnitDefs[cdefid]))
     candidates[i] = {candidateId, cdefid, UnitDefs[cdefid]}
   end
 
@@ -493,45 +361,13 @@ function getBestCandidate(candidatesOriginal, assistType, targetE, targetMM)
     table.sort(candidates, function(a,b)
       local aWillStall = buildingWillStall(a[1])
       local bWillStall = buildingWillStall(b[1])
---      log(a[3]['humanName']..' will stall')
---      log(aWillStall)
---      log(b[3]['humanName']..' will stall')
---      log(bWillStall)
       if aWillStall and bWillStall then
---        log('aWillStall and bWillStall')
---        log(table.tostring({
---          a[3]['humanName'],
---          a[3]['energyMake'],
---          a[3]['power'],
---          b[3]['humanName'],
---          b[3]['energyMake'],
---          b[3]['power'],
---        }))
         return a[3]['energyMake'] / a[3]['buildTime'] / a[3]['power'] > b[3]['energyMake'] / b[3]['buildTime'] / b[3]['power']
       elseif aWillStall and not bWillStall and a[3]['energyMake'] > 0 then
---        log('aWillStall and not bWillStall ')
---        log(table.tostring({
---          a[3]['humanName'],
---          a[3]['energyMake'],
---          a[3]['power'],
---          b[3]['humanName'],
---          b[3]['energyMake'],
---          b[3]['power'],
---        }))
         return false
       elseif not aWillStall and bWillStall and b[3]['energyMake'] > 0 then
---        log('not aWillStall and bWillStall')
---        log(table.tostring({
---          a[3]['humanName'],
---          a[3]['energyMake'],
---          a[3]['power'],
---          b[3]['humanName'],
---          b[3]['energyMake'],
---          b[3]['power'],
---        }))
         return true
       else
---        log('no stall or no e')
         return a[3]['energyMake'] / a[3]['power'] > b[3]['energyMake'] / b[3]['power']
       end
     end)
@@ -540,7 +376,6 @@ function getBestCandidate(candidatesOriginal, assistType, targetE, targetMM)
   elseif assistType == 'metal' then
     return false
   end
---  log('sending candidate ' .. candidates[1][3]['humanName'])
   return candidates[1][1]
 end
 
@@ -569,7 +404,6 @@ function updateFastResourceStatus()
   isPositiveMetalDerivative = m_inc > (m_pull+m_exp)/2
   metalLevel = m_curr/m_max
 
-  -- log('e_pull '.. e_pull .. ' e_inc ' .. e_inc .. ' e_exp ' ..  e_exp)
   isPositiveEnergyDerivative = e_inc > (e_pull+e_exp)/2
   energyLevel = e_curr/e_max
 
@@ -609,10 +443,6 @@ end
 function getEout(unitDef)
   local totalEOut = unitDef.energyMake or 0
 
-  -- if negsolar[unitDef.name] then
-      -- totalEOut = totalEOut + math.abs(unitDef.energyUpkeep)
-  -- end
-
   totalEOut = totalEOut + -1*unitDef.energyUpkeep
 
   if unitDef.tidalGenerator > 0 and tidalStrength > 0 then
@@ -636,6 +466,7 @@ function getEout(unitDef)
   return totalEOut
 end
 
+-- todo
 function getTraveltime(unitDef, A, B)
   selectedUnits = GetSelectedUnits()
   local totalBuildSpeed = getBuildersBuildSpeed(getUnitsBuildingUnit(targetId))
@@ -651,10 +482,6 @@ function doFastForwardDecision(builderId, targetId, cmdQueueTag, cmdQueueTagg)
   local totalBuildSpeed = getBuildersBuildSpeed(getUnitsBuildingUnit(targetId))
   local secondsLeft = getBuildTimeLeft(targetId)
   local unitDef = UnitDefs[GetUnitDefID(targetId)]
---  log('isTimeToMoveOn(secondsLeft, builderId, unitDef, totalBuildSpeed)')
---  log(isTimeToMoveOn(secondsLeft, builderId, unitDef, totalBuildSpeed))
---  log('buildingWillStall(targetId)')
---  log(buildingWillStall(targetId))
   if isTimeToMoveOn(secondsLeft, builderId, unitDef, totalBuildSpeed) and not buildingWillStall(targetId) then
     moveOnFromBuilding(builderId, targetId, cmdQueueTag, cmdQueueTagg)
   end
@@ -666,10 +493,8 @@ function moveOnFromBuilding(builderId, targetId, cmdQueueTag, cmdQueueTagg)
   else
     GiveOrderToUnit(builderId, CMD.REMOVE, {cmdQueueTag,cmdQueueTagg}, {"ctrl"})
   end
-  -- log(builderId .. ' moved on from ' .. targetId)
   builders[builderId].previousBuilding = targetId
   abandonedTargetIDs[targetId] = true
-  -- log('prev ' .. targetId, builders[builderId].previousBuilding)
   t1 = Spring.GetTimer()
 end
 
@@ -677,10 +502,8 @@ function isTimeToMoveOn(secondsLeft, builderId, unitDef, totalBuildSpeed)
   local plannerBuildSpeed = builders[builderId].originalBuildSpeed
   local plannerBuildShare = plannerBuildSpeed / totalBuildSpeed
   local slowness = 45/unitDef.speed
-  -- log("plannerBuild calc " .. plannerBuildShare .. " = " .. plannerBuildSpeed .. " / " .. totalBuildSpeed)
   if ((plannerBuildShare < 0.75 and secondsLeft < 1.2*slowness) or (plannerBuildShare < 0.5 and secondsLeft < 3.4*slowness) or (plannerBuildShare < 0.15 and secondsLeft < 8*slowness) or (plannerBuildShare < 0.05 and secondsLeft < 12*slowness)) then
     totalSavedTime = totalSavedTime + secondsLeft
-    -- log(string.format('Con moved on, %.0f%% buildshare and %.1f sec left, saved %.0f moving sec, lost %.0f con total sec', plannerBuildShare*100, secondsLeft, totalSavedTime, Spring.DiffTimers(Spring.GetTimer(), t0)))
     return true
   else
     return false
@@ -695,8 +518,6 @@ function buildingWillStall(unitId)
   local energy = unitDef.energyCost / speed
 
   local mDrain, eDrain = getUnitsUpkeep()
-
---  log('willstall? '.. unitDef.humanName .. ' ' ..mDrain .. ' '.. eDrain )
 
   if buildingWillStallType("metal", metal, secondsLeft, mDrain) or buildingWillStallType("energy", energy, secondsLeft, eDrain) then
     return true
@@ -735,21 +556,8 @@ function buildingWillStallType(type, consumption, secondsLeft, releasedExpenditu
   local after = lvl + secondsLeft * changeWhenBuilding
 
   if consumption < 1 or (not alreadyInStall and after > 0) then
---    willStall = false
     return false
-
---    if changeWhenBuilding < 0 then
---      if after < 0 then
---        after = 0
---      end
---    else
---      if after > storage then
---        after = storage
---      end
---    end
-
   else
---    willStall = true
     return true
   end
 
@@ -839,12 +647,6 @@ function traceUpkeep(unitID, alreadyCounted)
 
   local metalMake, metal, energyMake, energy = GetUnitResources(unitID)
 
---  log('table.tostring(builders)')
---  log(unitDef(unitID).humanName)
---  log(unitDef(unitID).isBuilder)
---  log(unitDef(unitID).canAssist)
---  log(unitDef(unitID).isFactory)
---  log(builders[unitID])
   for _, guardID in ipairs(builders[unitID].guards) do
     if builders[guardID].owned then
       local guarderMetal, guarderEnergy = traceUpkeep(guardID, alreadyCounted)
