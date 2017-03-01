@@ -27,10 +27,10 @@ local GetUnitResources = Spring.GetUnitResources
 local GetUnitsInCylinder = Spring.GetUnitsInCylinder
 local GetUnitsInSphere = Spring.GetUnitsInSphere
 local GiveOrderToUnit = Spring.GiveOrderToUnit
+local UnitDefs = UnitDefs
 
 local abandonedTargetIDs = {}
 local builders = {}
-local commanderBuildSpeed = 100
 local conversionLevelHistory = {}
 local log = Spring.Echo
 local mainIterationModuloLimit = 5
@@ -86,14 +86,8 @@ function registerUnit(unitID, unitDefID)
   local unitDef = UnitDefs[unitDefID]
 
   if unitDef.isBuilder and unitDef.canAssist then
-
     builders[unitID] = {["buildSpeed"] = unitDef.buildSpeed, originalBuildSpeed = unitDef.buildSpeed, ['unitDef'] = unitDef, ["targetId"] = nil, ["guards"] = {},
       ['previousBuilding'] = nil}
-
-    if unitDef.customParams.iscommander then
-      commanderBuildSpeed = unitDef.buildSpeed
-    end
-
   end
 
 end
@@ -250,10 +244,15 @@ function builderIteration(n)
       local targetUnitMM, targetUnitE = getUnitResourceProperties(targetDefID, targetDef)
 
       if n % (mainIterationModuloLimit * 3) == 0 then
-        if not regularizedPositiveEnergy and not isEnergyLeaking and ((targetUnitMM >= 0 and not positiveMMLevel) or (targetUnitE < 0 and isEnergyStalling)) then
-          builderForceAssist('energy', builderId, targetId, targetDef, candidateNeighbours, targetUnitMM, targetUnitE)
+        if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
+          log(builderDef.humanName .. ' ForceAssist buildPower target ' .. targetId .. ' ' .. targetDef.humanName)
+--          builderForceAssist('buildPower', builderId, targetId, targetDefID, candidateNeighbours, targetUnitMM, targetUnitE)
+        elseif not regularizedPositiveEnergy and not isEnergyLeaking and ((targetUnitMM >= 0 and not positiveMMLevel) or (targetUnitE < 0 and isEnergyStalling)) then
+          log(builderDef.humanName .. ' ForceAssist energy target ' .. targetId .. ' ' .. targetDef.humanName)
+--          builderForceAssist('energy', builderId, targetId, targetDefID, candidateNeighbours, targetUnitMM, targetUnitE)
         elseif targetUnitE > 0 and positiveMMLevel and regularizedPositiveEnergy then
-          builderForceAssist('mm', builderId, targetId, targetDef, candidateNeighbours, targetUnitMM, targetUnitE)
+          log(builderDef.humanName .. ' ForceAssist mm target ' .. targetId .. ' ' .. targetDef.humanName)
+--          builderForceAssist('mm', builderId, targetId, targetDefID, candidateNeighbours, targetUnitMM, targetUnitE)
         end
       end
 
@@ -307,46 +306,24 @@ function purgeCompleteRepairs(builderId, cmdQueue)
 end
 
 
-function builderForceAssist(assistType, builderId, targetId, targetDef, neighbours, targetMM, targetE)
-  local foundBuildPowerUnit = false
-  if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
-    for _, candidateId in ipairs(neighbours) do
-      local _, _, _, _, candidateBuild = GetUnitHealth(candidateId)
-      if candidateBuild ~= nil and candidateBuild < 1 then
+function builderForceAssist(assistType, builderId, targetId, targetDefID, neighbours)
+  local bestCandidate = getBestCandidate(neighbours, assistType, targetDefID)
 
-        local candidateDefID = GetUnitDefID(candidateId)
-        local candidateDef = UnitDefs[candidateDefID]
-        if candidateDef.buildSpeed ~= nil then
-        end
-        if candidateDef.buildSpeed ~= nil and candidateDef.buildSpeed > 0 then
-          GiveOrderToUnit(builderId, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, candidateId}, {"alt"})
-          foundBuildPowerUnit = true
-          break
-        end
-      end
+  if bestCandidate and bestCandidate ~= false then
+    if bestCandidate ~= targetId then
+--        log('shouldnt be possible :(')
     end
-  elseif targetDef.buildSpeed > 0 then
-    local cmdQueue = GetUnitCommands(builderId, 3);
-    if cmdQueue and #cmdQueue > 2 and cmdQueue[2].id < 0 then
-      moveOnFromBuilding(builderId, targetId, cmdQueue[1].tag)
-    end
+--      log('repair bestCandidate '.. bestCandidate .. ' '.. UnitDefs[GetUnitDefID(bestCandidate)].humanName)
+    repair(builderId, bestCandidate)
   end
 
-  if foundBuildPowerUnit == false then
-    local bestCandidate = getBestCandidate(neighbours, assistType, targetE, targetMM)
-
-    if bestCandidate ~= false and bestCandidate ~= targetId then
-      repair(builderId, bestCandidate)
-    end
-
-  end
 end
 
 function repair(builderId, targetId)
   GiveOrderToUnit(builderId, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, targetId}, {"alt"})
 end
 
-function getBestCandidate(candidatesOriginal, assistType, targetE, targetMM)
+function getBestCandidate(candidatesOriginal, assistType, targetD)
   if #candidatesOriginal == 0 then
     return false
   end
@@ -354,25 +331,48 @@ function getBestCandidate(candidatesOriginal, assistType, targetE, targetMM)
 
   for i, candidateId in ipairs(candidates) do
     local cdefid = GetUnitDefID(candidateId)
-    candidates[i] = {candidateId, cdefid, UnitDefs[cdefid]}
+    local udef = UnitDefs[cdefid]
+    if cdefid ~= targetDefID and not (assistType == 'buildPower' and udef.buildSpeed <= 0) and not (assistType == 'energy'
+            and udef['energyMake'] <= 0) and not (assistType == 'mm' and getMetalMakingEfficiency(cdefid) <= 0) then
+      candidates[i] = {candidateId, cdefid, udef }
+    end
   end
 
-  if assistType == 'energy' then
+  if #candidates == 0 then
+    return false
+  end
+
+  if assistType == 'buildPower' then
+    table.sort(candidates, function(a,b)
+      local aWillStall = buildingWillStall(a[1])
+      local bWillStall = buildingWillStall(b[1])
+      if aWillStall and bWillStall then
+        return a[3]['power'] < b[3]['power']
+      elseif aWillStall and not bWillStall then
+        return false
+      elseif not aWillStall and bWillStall then
+        return true
+      else
+        return a[3].buildSpeed / a[3]['buildTime'] / a[3]['power'] > b[3].buildSpeed / b[3]['buildTime'] / b[3]['power']
+      end
+    end)
+  elseif assistType == 'energy' then
     table.sort(candidates, function(a,b)
       local aWillStall = buildingWillStall(a[1])
       local bWillStall = buildingWillStall(b[1])
       if aWillStall and bWillStall then
         return a[3]['energyMake'] / a[3]['buildTime'] / a[3]['power'] > b[3]['energyMake'] / b[3]['buildTime'] / b[3]['power']
-      elseif aWillStall and not bWillStall and a[3]['energyMake'] > 0 then
+      elseif aWillStall and not bWillStall then
         return false
-      elseif not aWillStall and bWillStall and b[3]['energyMake'] > 0 then
+      elseif not aWillStall and bWillStall then
         return true
       else
         return a[3]['energyMake'] / a[3]['power'] > b[3]['energyMake'] / b[3]['power']
       end
     end)
   elseif assistType == 'mm' then
-    table.sort(candidates, function(a,b) return getMetalMakingEfficiency(a[2]) < getMetalMakingEfficiency(b[2]) end)
+    table.sort(candidates, function(a,b)
+      return getMetalMakingEfficiency(a[2]) < getMetalMakingEfficiency(b[2]) end)
   elseif assistType == 'metal' then
     return false
   end
@@ -409,7 +409,7 @@ function updateFastResourceStatus()
 
   tooLittleMMs = energyLevel > mm_level*1.1
   tooMuchMMs = energyLevel < mm_level*0.9
-  if energyLevel >= mm_level then
+  if energyLevel > mm_level then
     positiveMMLevel = true
     else
     positiveMMLevel = false
@@ -432,7 +432,7 @@ function getUnitResourceProperties(unitDefID, unitDef)
 end
 
 function getMetalMakingEfficiency(unitDefID)
-  makerDef = WG.energyConversion.convertCapacities[unitDefID]
+  local makerDef = WG.energyConversion.convertCapacities[unitDefID]
   if makerDef ~= nil then
     return makerDef.e
   else
