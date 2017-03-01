@@ -245,14 +245,14 @@ function builderIteration(n)
 
       if n % (mainIterationModuloLimit * 3) == 0 then
         if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
-          log(builderDef.humanName .. ' ForceAssist buildPower target ' .. targetId .. ' ' .. targetDef.humanName)
---          builderForceAssist('buildPower', builderId, targetId, targetDefID, candidateNeighbours, targetUnitMM, targetUnitE)
+--          log(builderDef.humanName .. ' ForceAssist buildPower target ' .. targetId .. ' ' .. targetDef.humanName)
+          builderForceAssist('buildPower', builderId, targetId, targetDefID, candidateNeighbours)
         elseif not regularizedPositiveEnergy and not isEnergyLeaking and ((targetUnitMM >= 0 and not positiveMMLevel) or (targetUnitE < 0 and isEnergyStalling)) then
-          log(builderDef.humanName .. ' ForceAssist energy target ' .. targetId .. ' ' .. targetDef.humanName)
---          builderForceAssist('energy', builderId, targetId, targetDefID, candidateNeighbours, targetUnitMM, targetUnitE)
+--          log(builderDef.humanName .. ' ForceAssist energy target ' .. targetId .. ' ' .. targetDef.humanName)
+          builderForceAssist('energy', builderId, targetId, targetDefID, candidateNeighbours)
         elseif targetUnitE > 0 and positiveMMLevel and regularizedPositiveEnergy then
-          log(builderDef.humanName .. ' ForceAssist mm target ' .. targetId .. ' ' .. targetDef.humanName)
---          builderForceAssist('mm', builderId, targetId, targetDefID, candidateNeighbours, targetUnitMM, targetUnitE)
+--          log(builderDef.humanName .. ' ForceAssist mm target ' .. targetId .. ' ' .. targetDef.humanName)
+          builderForceAssist('mm', builderId, targetId, targetDefID, candidateNeighbours)
         end
       end
 
@@ -323,7 +323,7 @@ function repair(builderId, targetId)
   GiveOrderToUnit(builderId, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, targetId}, {"alt"})
 end
 
-function getBestCandidate(candidatesOriginal, assistType, targetD)
+function getBestCandidate(candidatesOriginal, assistType, targetDefID)
   if #candidatesOriginal == 0 then
     return false
   end
