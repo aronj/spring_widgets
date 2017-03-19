@@ -53,17 +53,16 @@ local regularizedPositiveEnergy = true
 local regularizedNegativeMetal = false
 local regularizedNegativeEnergy = false
 
-local positiveMMLevel = 0
-local tooLittleMMs = true
-local tooMuchMMs = false
+local positiveMMLevel = false
 local metalLevel = 0.5
-local isPositiveMetalDerivative = false
 local energyLevel = 0.5
+local metalMakingLevel = 0.5
+local isPositiveMetalDerivative = false
 local isPositiveEnergyDerivative = false
+local isMetalStalling = false
 local isEnergyStalling = false
 local isMetalLeaking = true
 local isEnergyLeaking = true
-
 
 function widget:Initialize()
     if Spring.GetSpectatingState() or Spring.IsReplay() then
@@ -223,15 +222,15 @@ function builderIteration(n)
       local mpx, _, mpz = GetUnitPosition(builderId, true)
       local neighbours = GetUnitsInCylinder(mpx, mpz, builderDef.buildDistance, myTeamId)
 
+--      local candidateNeighboursExclusive = {}
       local candidateNeighbours = {}
-      local candidateNeighboursInclusive = {}
       for i, candidateId in ipairs(neighbours) do
         local _, _, _, _, candidateBuild = GetUnitHealth(candidateId)
         if candidateBuild ~= nil and candidateBuild < 1 then
-          table.insert(candidateNeighboursInclusive, candidateId)
-          if candidateId ~= builderId  then
-            table.insert(candidateNeighbours, candidateId)
-          end
+          table.insert(candidateNeighbours, candidateId)
+--          if candidateId ~= builderId  then
+--            table.insert(candidateNeighboursExclusive, candidateId)
+--          end
         end
       end
 
@@ -243,14 +242,19 @@ function builderIteration(n)
       -- mm/e switcher
       local targetUnitMM, targetUnitE = getUnitResourceProperties(targetDefID, targetDef)
 
-      if n % (mainIterationModuloLimit * 3) == 0 then
+--      log('targetUnitE > 0, positiveMMLevel, regpose or eleak === ' .. tostring(targetUnitE > 0) .. ', ' .. tostring(positiveMMLevel) .. ', ' .. tostring((regularizedPositiveEnergy or isEnergyLeaking) ))
+--      if targetUnitE > 0 then
+--        log(isEnergyLeaking)
+--        log('positiveMMLevel, not regnege or eleak === ' .. tostring(positiveMMLevel) .. ', ' .. tostring((regularizedPositiveEnergy or isEnergyLeaking) ))
+--      end
+      if n % (mainIterationModuloLimit * 3) == 0 and #candidateNeighbours > 1 then
         if (metalLevel > 0.8 or regularizedPositiveMetal) and (positiveMMLevel or not regularizedNegativeEnergy) then
 --          log(builderDef.humanName .. ' ForceAssist buildPower target ' .. targetId .. ' ' .. targetDef.humanName)
           builderForceAssist('buildPower', builderId, targetId, targetDefID, candidateNeighbours)
         elseif not regularizedPositiveEnergy and not isEnergyLeaking and ((targetUnitMM >= 0 and not positiveMMLevel) or (targetUnitE < 0 and isEnergyStalling)) then
 --          log(builderDef.humanName .. ' ForceAssist energy target ' .. targetId .. ' ' .. targetDef.humanName)
           builderForceAssist('energy', builderId, targetId, targetDefID, candidateNeighbours)
-        elseif targetUnitE > 0 and positiveMMLevel and regularizedPositiveEnergy then
+        elseif targetUnitE > 0 and positiveMMLevel and (not regularizedNegativeEnergy or isEnergyLeaking or isMetalStalling) then
 --          log(builderDef.humanName .. ' ForceAssist mm target ' .. targetId .. ' ' .. targetDef.humanName)
           builderForceAssist('mm', builderId, targetId, targetDefID, candidateNeighbours)
         end
@@ -263,7 +267,7 @@ function builderIteration(n)
 
       -- easy finish neighbour
       local _, _, _, _, targetBuild = GetUnitHealth(targetId)
-      for _, candidateId in ipairs(candidateNeighboursInclusive) do
+      for _, candidateId in ipairs(candidateNeighbours) do
         local candidateDef = unitDef(candidateId)
         -- same type and not actually same buildings
         if candidateId ~= targetId and candidateDef == targetDef then
@@ -281,9 +285,6 @@ function builderIteration(n)
     end
   end
 end
-
-
-
 
 function purgeCompleteRepairs(builderId, cmdQueue)
   local cmdq = deepcopy(cmdQueue)
@@ -305,16 +306,12 @@ function purgeCompleteRepairs(builderId, cmdQueue)
   return cmdq
 end
 
-
 function builderForceAssist(assistType, builderId, targetId, targetDefID, neighbours)
-  local bestCandidate = getBestCandidate(neighbours, assistType, targetDefID)
+  local bestCandidate = getBestCandidate(neighbours, assistType)
 
-  if bestCandidate and bestCandidate ~= false then
-    if bestCandidate ~= targetId then
---        log('shouldnt be possible :(')
-    end
+  if bestCandidate ~= false and targetDefID ~= bestCandidate[2] then
 --      log('repair bestCandidate '.. bestCandidate .. ' '.. UnitDefs[GetUnitDefID(bestCandidate)].humanName)
-    repair(builderId, bestCandidate)
+    repair(builderId, bestCandidate[1])
   end
 
 end
@@ -323,62 +320,92 @@ function repair(builderId, targetId)
   GiveOrderToUnit(builderId, CMD.INSERT, {0, CMD.REPAIR, CMD.OPT_CTRL, targetId}, {"alt"})
 end
 
-function getBestCandidate(candidatesOriginal, assistType, targetDefID)
+
+function sortHeuristicallyBuildPower(a, b)
+  local aWillStall = buildingWillStall(a[1])
+  local bWillStall = buildingWillStall(b[1])
+  if aWillStall and bWillStall then
+    return a[3]['power'] < b[3]['power']
+  elseif aWillStall and not bWillStall then
+    return false
+  elseif not aWillStall and bWillStall then
+    return true
+  else
+    return a[3].buildSpeed * (1 / getBuildTimeLeft(a[1])) * (1 / a[3]['power']) > b[3].buildSpeed * (1 / getBuildTimeLeft(b[1])) * (1 / b[3]['power'])
+  end
+end
+
+function sortHeuristicallyEnergy(a, b)
+  local aWillStall = buildingWillStall(a[1])
+  local bWillStall = buildingWillStall(b[1])
+  if aWillStall and bWillStall then
+    return a[3]['energyMake'] * (1 / getBuildTimeLeft(a[1]) * a[3]['power']) > b[3]['energyMake'] * (1 / getBuildTimeLeft(b[1]) * b[3]['power'])
+  elseif aWillStall and not bWillStall then
+    return false
+  elseif not aWillStall and bWillStall then
+    return true
+  else
+    return a[3]['energyMake'] * a[3]['power'] > b[3]['energyMake'] * b[3]['power']
+  end
+end
+
+function sortHeuristicallyMM(a,b)
+--  log('compare ' .. a[3].humanName .. ' '.. getMetalMakingEfficiency(a[2]))
+  return getMetalMakingEfficiency(a[2]) > getMetalMakingEfficiency(b[2])
+end
+
+function getBestCandidate(candidatesOriginal, assistType)
   if #candidatesOriginal == 0 then
     return false
   end
-  local candidates = deepcopy(candidatesOriginal)
+  local candidatesFull = deepcopy(candidatesOriginal)
+  local candidates = {}
 
-  for i, candidateId in ipairs(candidates) do
+  for i, candidateId in ipairs(candidatesFull) do
     local cdefid = GetUnitDefID(candidateId)
     local udef = UnitDefs[cdefid]
-    if cdefid ~= targetDefID and not (assistType == 'buildPower' and udef.buildSpeed <= 0) and not (assistType == 'energy'
-            and udef['energyMake'] <= 0) and not (assistType == 'mm' and getMetalMakingEfficiency(cdefid) <= 0) then
-      candidates[i] = {candidateId, cdefid, udef }
+    local mm_eff = getMetalMakingEfficiency(cdefid)
+--    if assistType == 'mm' and mm_eff and mm_eff <= 0 then
+--      log('mm eff ' .. getMetalMakingEfficiency(cdefid))
+--    end
+    if
+--    udef and (assistType == 'mm' and mm_eff) and
+      not (assistType == 'buildPower' and (udef.buildSpeed <= 0 or not udef.buildSpeed) ) and
+      not (assistType == 'energy' and (udef['energyMake'] <= 0 or not udef['energyMake'])) and
+      not (assistType == 'mm' and mm_eff and mm_eff <= 0) then
+      candidates[i] = {candidateId, cdefid, udef}
+    else
+--      if assistType == 'mm' then
+--        log('removed from candidates ' .. assistType .. ' ' .. udef.humanName)
+--      end
     end
   end
 
-  if #candidates == 0 then
+  if not candidates[1] or not candidates[2] then
     return false
   end
 
+  if #candidates == 1 then
+    return candidates[1]
+  -- todo investigate why number
+  elseif type(candidates[1]) == "number" or type(candidates[2]) == "number" then
+    return false
+  end
   if assistType == 'buildPower' then
-    table.sort(candidates, function(a,b)
-      local aWillStall = buildingWillStall(a[1])
-      local bWillStall = buildingWillStall(b[1])
-      if aWillStall and bWillStall then
-        return a[3]['power'] < b[3]['power']
-      elseif aWillStall and not bWillStall then
-        return false
-      elseif not aWillStall and bWillStall then
-        return true
-      else
-        return a[3].buildSpeed / a[3]['buildTime'] / a[3]['power'] > b[3].buildSpeed / b[3]['buildTime'] / b[3]['power']
-      end
-    end)
+   table.sort(candidates, sortHeuristicallyBuildPower)
   elseif assistType == 'energy' then
-    table.sort(candidates, function(a,b)
-      local aWillStall = buildingWillStall(a[1])
-      local bWillStall = buildingWillStall(b[1])
-      if aWillStall and bWillStall then
-        return a[3]['energyMake'] / a[3]['buildTime'] / a[3]['power'] > b[3]['energyMake'] / b[3]['buildTime'] / b[3]['power']
-      elseif aWillStall and not bWillStall then
-        return false
-      elseif not aWillStall and bWillStall then
-        return true
-      else
-        return a[3]['energyMake'] / a[3]['power'] > b[3]['energyMake'] / b[3]['power']
-      end
-    end)
+   table.sort(candidates, sortHeuristicallyEnergy)
   elseif assistType == 'mm' then
-    table.sort(candidates, function(a,b)
-      return getMetalMakingEfficiency(a[2]) < getMetalMakingEfficiency(b[2]) end)
+--    log(table.tostring(candidates))
+    table.sort(candidates, sortHeuristicallyMM)
   elseif assistType == 'metal' then
-    return false
+   return false
   end
-  return candidates[1][1]
+  -- log(table.tostring(candidates))
+  -- log(candidates[1][1])
+--  return false
+  return candidates[1]
 end
-
 
 function deepcopy(orig)
     local orig_type = type(orig)
@@ -397,9 +424,9 @@ end
 
 
 function updateFastResourceStatus()
-  mm_level = GetTeamRulesParam(myTeamId, 'mmLevel')
-  m_curr, m_max, m_pull, m_inc, m_exp = GetTeamResources(myTeamId, 'metal')
-  e_curr, e_max, e_pull, e_inc, e_exp = GetTeamResources(myTeamId, 'energy')
+  metalMakingLevel = GetTeamRulesParam(myTeamId, 'mmLevel')
+  local m_curr, m_max, m_pull, m_inc, m_exp = GetTeamResources(myTeamId, 'metal')
+  local e_curr, e_max, e_pull, e_inc, e_exp = GetTeamResources(myTeamId, 'energy')
 
   isPositiveMetalDerivative = m_inc > (m_pull+m_exp)/2
   metalLevel = m_curr/m_max
@@ -407,15 +434,13 @@ function updateFastResourceStatus()
   isPositiveEnergyDerivative = e_inc > (e_pull+e_exp)/2
   energyLevel = e_curr/e_max
 
-  tooLittleMMs = energyLevel > mm_level*1.1
-  tooMuchMMs = energyLevel < mm_level*0.9
-  if energyLevel > mm_level then
+  if energyLevel > metalMakingLevel then
     positiveMMLevel = true
     else
     positiveMMLevel = false
   end
 
---  isMetalStalling = metalLevel < 0.01 and not regularizedPositiveMetal
+  isMetalStalling = metalLevel < 0.01 and not regularizedPositiveMetal
   isEnergyStalling = energyLevel < 0.01 and not regularizedPositiveEnergy
   isMetalLeaking = metalLevel > 0.99 and regularizedPositiveMetal
   isEnergyLeaking = energyLevel > 0.99 and isPositiveEnergyDerivative

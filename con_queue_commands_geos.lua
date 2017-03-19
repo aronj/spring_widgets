@@ -10,6 +10,8 @@ function widget:GetInfo()
   }
 end
 
+-- TODO DOESNT WORK QUEUE CMDS ON FLYING
+
 local GetSelectedUnits = Spring.GetSelectedUnits
 local GetUnitCommands = Spring.GetUnitCommands
 local GiveOrderToUnit = Spring.GiveOrderToUnit
@@ -25,6 +27,8 @@ local GetTeamResources = Spring.GetTeamResources
 local GetTeamResources = Spring.GetTeamResources
 local SetTeamRulesParam = Spring.SetTeamRulesParam
 local GetTeamRulesParam = Spring.GetTeamRulesParam
+local GetGameRulesParam = Spring.GetGameRulesParam
+local SetGameRulesParam = Spring.SetGameRulesParam
 local GetTeamUnits = Spring.GetTeamUnits
 local GetUnitCommands = Spring.GetUnitCommands
 local GetUnitDefID = Spring.GetUnitDefID
@@ -48,7 +52,12 @@ function widget:Initialize()
   if Spring.GetSpectatingState() or Spring.IsReplay() then
     widgetHandler:RemoveWidget()
   end
---  SetTeamRulesParam(myTeamId, 'mmLevel', 0.2)
+  log(GetTeamRulesParam(myTeamId, 'mmLevel'))
+  log(myTeamId)
+  -- SetTeamRulesParam(myTeamId, 'mmLevel1', 0.2)
+--  log(GetGameRulesParam('mmLevel'))
+--  SetGameRulesParam('mmLevel', 0.2)
+  log(GetTeamRulesParam(myTeamId, 'mmLevel'))
 end
 
 function widget:KeyPress(key, mods, isRepeat)
@@ -101,7 +110,7 @@ function updateGeoDefs()
   for _, unitId in ipairs(GetTeamUnits(Spring.GetMyTeamID())) do
     local unitDefId = GetUnitDefID(unitId)
     local udef = unitDef(unitId)
-    if udef.name:find('geo') or udef.humanName:find('[Gg]eo') then
+    if udef.name:find('geo') or udef.humanName:find('[Gg]eo') or udef.humanName:match('Resource Fac') then
 
       local m = udef.makesMetal - udef.metalUpkeep
       local e = udef.energyUpkeep
